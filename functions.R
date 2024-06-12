@@ -1,6 +1,6 @@
 # here are the functions
 
-sizefreq_sim <- function(Linf = 60, CV.Linf,t0 = 0 ,tmax = 20,L.bins = 1, L.classes = NULL,
+sizefreq_sim <- function(Linf, CV.Linf,t0 = 0 ,tmax = 20,L.bins = 1, L.classes = NULL,
                                                k,M,LW.a,LW.b, trunc.param = 0, run.name) {
   
   #@@@@@@@@@@@@@@@@@
@@ -173,7 +173,7 @@ sizefreq_sim <- function(Linf = 60, CV.Linf,t0 = 0 ,tmax = 20,L.bins = 1, L.clas
 } # end of function
 
 
-sizeComp <- function(linf = 60, m, k, sa = 0.01, X = 200,
+sizeComp <- function(linf, m, k, sa = 0.01, X = 200,
                      l0r = 0, cv, w=1, N = 5000, l50 = 5, l95r = 7.5){
   
   ## Construct relative abundance at age (relative with respect to recruitment)

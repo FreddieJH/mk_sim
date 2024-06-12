@@ -5,44 +5,77 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
+# Set-up
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
 library(tidyverse)
+library(colorspace)
 
 source("functions.R")
 ```
 
+# Simulation input
+
 ```{r}
 
-sim_input <- 
-  expand_grid(
-  k = seq(0.1, 1.5,  by = 0.05), 
-  m = seq(0.1, 1.5, by = 0.05), 
-  cv_a = seq(0.05, 0.25, by = 0.05)) 
+max_length <- 60
+m_gridsize <- 0.01
+k_gridsize <- 0.01
+l50_gridsize <- 1
+l95_gridsize <- 0.1
 
+sim_input <- 
+  bind_rows(
+    # Selectivity (3 x MK ratios)
+    expand_grid(
+      tibble(m = c(0.2, 0.3, 0.4),
+             k = c(0.4, 0.2, 0.2)),
+      cv_a = 0.1
+    ), 
+    # MK (3 x CV-at-age)
+    expand_grid(
+      cv_a = c(0.05, 0.1, 0.2),
+      k = seq(0.1, 1.5,  by = 0.05), 
+      m = seq(0.1, 1.5, by = 0.05)
+    )
+  )
+
+# sim_input <- 
+#    expand_grid(
+#       # tibble(m = c(0.2, 0.3, 0.4), 
+#       #        k = c(0.4, 0.2, 0.2)), 
+#        tibble(m = c(0.05, 0.1, 0.2, 0.4), 
+#              k = c(0.1, 0.2, 0.4, 0.8)), 
+#       cv_a = 0.1
+#     )
 
 ```
 
+# Comparing the three distributions
+
 ```{r}
 
+# L50 = midpoint
+# L95 = 95th percentile 
 logistic_selection <- function(l, l50, l95) {
   1 / (1 + exp(-(log(19)*((l - l50)/(l95-l50)))))
 }
-
-tibble(x = seq(1, 50, by = 0.1)) %>% 
-  mutate(ls = logistic_selection(x, 25, 50)) %>% 
-  ggplot(aes(x, ls)) +
-  geom_line()
-
-tibble(x = seq(1, 50, by = 0.1)) %>% 
-  mutate(y = dnorm(x, mean = 30, sd = 3)) %>% 
-  mutate(y2 = y*logistic_selection(y, l50=25, l95=50)) %>% 
-  ggplot(aes(x, y)) +
-  geom_line() +
-  geom_line(aes(y = y2), col = "red")
+# 
+# tibble(x = seq(1, 50, by = 0.1)) %>% 
+#   mutate(ls = logistic_selection(x, 25, 50)) %>% 
+#   ggplot(aes(x, ls)) +
+#   geom_line()
+# 
+# tibble(length = seq(1, 50, by = 0.1)) %>% 
+#   mutate(abun = dnorm(length, mean = 30, sd = 3)) %>% 
+#   mutate(selected_abun = abun*logistic_selection(abun, l50=25, l95=50)) %>% 
+#   ggplot(aes(x, y)) +
+#   geom_line() +
+#   geom_line(aes(y = y2), col = "red")
 
 ```
-
 
 # Simulations
 
@@ -52,25 +85,34 @@ tibble(x = seq(1, 50, by = 0.1)) %>%
 get_lengths <- function(x) x[[1]][[1]]$Length.classes
 get_abunds <- function(x) x[[1]][[1]]$Unfished.Number
 
-sim1 <- 
+sim_ar <- 
   sim_input %>% 
-  mutate(sim1 = pmap(.l = list(M = m, k = k, CV.Linf = cv_a), .f = sizefreq_sim)) %>% 
-  mutate(l = map(sim1, .f = get_lengths), 
-         n = map(sim1, .f = get_abunds)) %>% 
+  mutate(sim1 = pmap(.l = list(M = m, k = k, CV.Linf = cv_a, 
+                               Linf = max_length), 
+                     .f = sizefreq_sim)) %>% 
+  mutate(l = map(.x = sim1, 
+                 .f = get_lengths), 
+         n = map(.x = sim1, 
+                 .f = get_abunds)) %>% 
   select(m, k, l, n, cv_a) %>% 
   unnest(cols = c(l, n))
 
-sim2 <- 
+sim_cr <- 
   sim_input %>% 
-  mutate(pred2 = pmap(.l = list(m = m, k = k, cv = cv_a), .f = sizeComp)) %>% 
-  unnest(cols = pred2) %>% 
+  mutate(pred = pmap(.l = list(m = m,
+                               k = k, 
+                               cv = cv_a, 
+                               linf = max_length), 
+                     .f = sizeComp)) %>% 
+  unnest(cols = pred) %>% 
   select(m, k, l = L, n = Nl, cv_a)
-  
+
 ```
 
 # RLS binning
 
 ```{r}
+
 rls_bin_breaks <- 
   c(2.5, 5.0, 7.5,  10.0, 12.5, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 
     50.0, 62.5, 75.0, 87.5, 100.0, 112.5, 125.0, 137.5, 150.0, 
@@ -84,20 +126,20 @@ rls_bin_table <-
   ) %>% 
   filter(size_class %in% c(rls_bin_breaks, 500))
 
-sim1_rls <- 
-sim1 %>% 
-  mutate(l = rls_bin_table$size_class[.bincode(l, rls_bin_table$size_min)]) %>% 
+sim_ar_binned <- 
+  sim_ar %>% 
+  mutate(l = rls_bin_table$size_class[.bincode(l, rls_bin_table$size_min)]) %>%
   drop_na() %>% 
   summarise(n = sum(n), 
             .by = c(m, k, cv_a, l)) 
 
-
-sim2_rls <- 
-  sim2 %>% 
-  mutate(l = rls_bin_table$size_class[.bincode(l, rls_bin_table$size_min)]) %>% 
+sim_cr_binned <- 
+  sim_cr %>% 
+  mutate(l = rls_bin_table$size_class[.bincode(l, rls_bin_table$size_min)]) %>%
   drop_na() %>% 
   summarise(n = sum(n), 
             .by = c(m, k, cv_a, l)) 
+
 ```
 
 
@@ -105,30 +147,26 @@ sim2_rls <-
 
 ```{r}
 
-sim1_summary <- 
-  sim1  %>% 
-   summarise(mean = sum(l*n)/sum(n), 
-              sd = sqrt(sum(n * (l - mean)^2) / sum(n)), 
-              .by = c(m, k, cv_a))
+sim_summary <- 
+  sim_ar %>% 
+  mutate(sim = "ar") %>% 
+  bind_rows(sim_cr %>% 
+              mutate(sim = "cr")) %>% 
+  summarise(mean = sum(l*n)/sum(n), 
+            sd = sqrt(sum(n * (l - mean)^2) / sum(n)), 
+            .by = c(m, k, cv_a, sim)) %>% 
+  mutate(cv = sd/mean)
 
-sim2_summary <- 
-  sim2  %>% 
-   summarise(mean = sum(l*n)/sum(n), 
-              sd = sqrt(sum(n * (l - mean)^2) / sum(n)), 
-              .by = c(m, k, cv_a))
+sim_binned_summary <- 
+  sim_ar_binned %>% 
+  mutate(sim = "ar") %>% 
+  bind_rows(sim_cr_binned %>% 
+              mutate(sim = "cr")) %>% 
+  summarise(mean = sum(l*n)/sum(n), 
+            sd = sqrt(sum(n * (l - mean)^2) / sum(n)), 
+            .by = c(m, k, cv_a, sim)) %>% 
+  mutate(cv = sd/mean)
 
-
-sim1_summary2 <- 
-  sim1_rls  %>% 
-   summarise(mean = sum(l*n)/sum(n), 
-              sd = sqrt(sum(n * (l - mean)^2) / sum(n)), 
-              .by = c(m, k, cv_a))
-
-sim2_summary2 <- 
-  sim2_rls  %>% 
-   summarise(mean = sum(l*n)/sum(n), 
-              sd = sqrt(sum(n * (l - mean)^2) / sum(n)), 
-              .by = c(m, k, cv_a))
 
 ```
 
@@ -136,182 +174,179 @@ sim2_summary2 <-
 
 ```{r}
 
-data_cont <- 
-sim1 %>% 
-  mutate(sim = "sw") %>% 
-  bind_rows(sim1 %>% 
-              mutate(sim = "wk")) %>% 
-  expand_grid(l50 = c(0.1, seq(5, 10, by = 5))) %>% 
-  mutate(l95 = l50+2.5) %>% 
+sim_select <- 
+  sim_ar %>% 
+  mutate(sim = "ar") %>% 
+  bind_rows(sim_cr %>% 
+              mutate(sim = "cr")) %>%
+  filter(m %in% c(0.2, 0.3, 0.4),
+          k %in% c(0.4, 0.2, 0.2),
+         cv_a == 0.1) %>%
+   # filter(m %in% c(0.05, 0.1, 0.2, 0.4), 
+   #           k %in% c(0.1, 0.2, 0.4, 0.8), 
+   #       cv_a == 0.1) %>% 
+  expand_grid(l50 = seq(1, max_length, by = 1),
+      l95_const = seq(1.05, 2, by = 0.05)) %>% 
+  mutate(l95 = l50*l95_const) %>% 
   mutate(n_s = n*logistic_selection(l, l50=l50, l95=l95))
 
-
-# data_binned <- 
-  data_cont %>% 
-    mutate(rls = rls_bin_table$size_class[.bincode(l, rls_bin_table$size_min)]) %>% 
-    drop_na() %>% 
-    summarise()
-
-sim1_s <- 
-  sim1 %>% 
-  expand_grid(l50 = c(0.1, seq(5, 10, by = 5))) %>% 
-  mutate(l95 = l50+2.5) %>% 
-  mutate(n_s = n*logistic_selection(l, l50=l50, l95=l95))
-
-sim2_s <- 
-  sim2 %>% 
-  expand_grid(l50 = c(0.1, seq(5, 10, by = 5))) %>% 
-  mutate(l95 = l50+2.5) %>% 
-  mutate(n_s = n*logistic_selection(l, l50=l50, l95=l95))
-
-sim1_s_binned <- 
-  sim1_rls %>% 
-  expand_grid(l50 = c(0.1, seq(5, 10, by = 5))) %>% 
-  mutate(l95 = l50+2.5) %>% 
-  mutate(n_s = n*logistic_selection(l, l50=l50, l95=l95))
-
-sim2_s_binned <- 
-  sim2_rls %>% 
-  expand_grid(l50 = c(0.1, seq(5, 10, by = 5))) %>% 
-  mutate(l95 = l50+2.5) %>% 
-  mutate(n_s = n*logistic_selection(l, l50=l50, l95=l95))
-
-sim1_summary2 <- 
-  sim1_s  %>% 
-   summarise(mean = sum(l*n_s)/sum(n_s), 
-              sd = sqrt(sum(n_s * (l - mean)^2) / sum(n_s)), 
-              .by = c(m, k, l50, l95, cv_a))
-
-sim2_summary2 <- 
-  sim2_s  %>% 
-   summarise(mean = sum(l*n_s)/sum(n_s), 
-              sd = sqrt(sum(n_s * (l - mean)^2) / sum(n_s)), 
-              .by = c(m, k, l50, l95, cv_a))
+sim_select_binned <-
+  sim_select %>% 
+  mutate(rls = rls_bin_table$size_class[.bincode(l, rls_bin_table$size_min)]) %>% 
+  drop_na() %>%
+  summarise(n_s = sum(n_s), 
+            .by = c(rls, cv_a, sim, l50, l95_const, l95, m, k))
 
 
-sim1_summary2_binned <- 
-  sim1_s_binned  %>% 
-   summarise(mean = sum(l*n_s)/sum(n_s), 
-              sd = sqrt(sum(n_s * (l - mean)^2) / sum(n_s)), 
-              .by = c(m, k, l50, l95, cv_a))
+sim_select_summary <- 
+  sim_select  %>% 
+  summarise(mean = sum(l*n_s)/sum(n_s), 
+            sd = sqrt(sum(n_s * (l - mean)^2) / sum(n_s)), 
+            .by = c(m, k, l50, l95, cv_a, sim)) %>% 
+  mutate(cv = sd/mean)
 
-sim2_summary2_binned <- 
-  sim2_s_binned  %>% 
-   summarise(mean = sum(l*n_s)/sum(n_s), 
-              sd = sqrt(sum(n_s * (l - mean)^2) / sum(n_s)), 
-              .by = c(m, k, l50, l95, cv_a))
+sim_select_summary_binned <- 
+  sim_select_binned  %>% 
+  summarise(mean = sum(rls*n_s)/sum(n_s), 
+            sd = sqrt(sum(n_s * (rls - mean)^2) / sum(n_s)), 
+            .by = c(m, k, l50, l95, cv_a, sim)) %>% 
+  mutate(cv = sd/mean)
 
-  
 ```
-
 
 # Plotting 
 
-```{r}
-
-sim1_summary2 %>% 
-  mutate(sim = "sw") %>% 
-  bind_rows(sim2_summary2 %>% 
-  mutate(sim = "wk")) %>% 
-  mutate(cv = sd/mean) %>% 
-  filter(cv_a==0.1) %>% 
-  mutate(k_15 = m/1.5) %>% 
-  mutate(k_05 = m/0.5) %>% 
-  mutate(k_20 = m/2.0) %>% 
-  mutate(k_10 = m/1.0) %>% 
-  ggplot() +
-  geom_rect(aes(xmin  = m-(0.1/2), 
-                xmax = m+(0.1/2),
-             ymin = k-(0.1/2),
-             ymax = k+ (0.1/2), 
-             fill = cv, col = cv)) +
-  geom_line(aes(x = m, y = k_15)) +
-  geom_line(aes(x = m, y = k_05), lty = 2) +
-  geom_line(aes(x = m, y = k_10), lty = "13") +
-  geom_line(aes(x = m, y = k_20), lty = "31") +
-  scale_fill_gradient2(midpoint=0.34, 
-                        low="blue", 
-                        mid="grey80",
-                     high="red" ) +
-  scale_colour_gradient2(midpoint=0.34, 
-                        low="blue", 
-                        mid="grey80",
-                     high="red") +
-  scale_y_continuous(limits = c(NA, 1.5)) +
-  theme_classic() +
-  labs(x = "M", 
-       y = "k") +
-  facet_grid(l50~sim)
-
-```
+## Figure 4
 
 ```{r}
-library(wesanderson)
-library(colorspace)
-pal <- wes_palette("Zissou1", 100, type = "continuous")
 
-sim1_summary2_binned %>% 
-  mutate(type = "binned") %>% 
-  bind_rows(sim1_summary2 %>%  
-  mutate(type = "unbinned")) %>% 
-  mutate(cv = sd/mean) %>% 
-  filter(cv_a == 0.1) %>% 
-  mutate(k_15 = m/1.5) %>% 
-  mutate(k_05 = m/0.5) %>% 
-  mutate(k_20 = m/2.0) %>% 
-  mutate(k_10 = m/1.0) %>% 
-  ggplot() +
-  geom_rect(aes(xmin  = m-(0.1/2), 
-                xmax = m+(0.1/2),
-             ymin = k-(0.1/2),
-             ymax = k+ (0.1/2), 
-             fill = cv, col = cv)) +
-  geom_line(aes(x = m, y = k_15)) +
-  geom_line(aes(x = m, y = k_05), lty = 2) +
-  geom_line(aes(x = m, y = k_10), lty = "13") +
-  geom_line(aes(x = m, y = k_20), lty = "31") +
-  scale_fill_continuous_diverging(palette = "Blue-Red 3", mid = 0.34) +
-  scale_color_continuous_diverging(palette = "Blue-Red 3", mid = 0.34) +
-  scale_y_continuous(limits = c(NA, 1.5)) +
-  theme_classic() +
-  labs(x = "Mortality (M)", 
-       y = "Growth coefficient (k)") +
-  facet_grid(l50~type) 
+sim1 <- sizefreq_sim(Linf = max_length,
+             M = 0.3, 
+             k = 0.2, 
+             CV.Linf = 0.1)
 
-```
+sim2 <- sizeComp(linf = max_length,
+             m = 0.3, 
+             k = 0.2, 
+             cv = 0.1) %>% 
+  select(l = L, n = Nl)
+
+tibble(l = get_lengths(sim1), 
+       n = get_abunds(sim1)) %>% 
+  mutate(sim = "ar") %>% 
+  
 
 
-
-```{r}
-tibble(l = seq(1, 100, by = 1)) %>% 
-  expand_grid(l50 = seq(5, 50, by = 5)) %>% 
-  mutate(l95 = l50+2.5) %>% 
-  mutate(l_s = l*logistic_selection(l, l50=l50, l95=l95)) %>% 
-  ggplot(aes(l, l_s)) +
-  geom_line() + 
-  facet_wrap(~l50)
-```
-
-```{r}
-sim1 %>% mutate(sim = "sw") %>% bind_rows(sim2 %>% mutate(sim = "wk")) %>% filter(m ==0.1, k==0.1) %>% ggplot(aes(l, n, col = sim))+geom_line()
-
-n <- sim1 %>% filter(m == 0.1, k == 0.1) %>% pull(n)
-l <- sim1 %>% filter(m == 0.1, k == 0.1) %>% pull(l)
-cn <- cumsum(n)
-thres <- max(cn)*0.99
-n <- 
-
-sim1 %>% 
-  filter(m == 0.1, k == 0.1) %>% 
-  mutate(l_cp = cumsum(n)) %>% 
-  mutate(l_99 = max(l_cp)*1, 
-         l_t = case_when(l_cp < l_99 ~ n, 
-                         l_cp > l_99 ~ 0)) %>% 
-  ggplot(aes(x = l, 
-             y = l_t)) +
+tibble(l = seq(1, 60, by = 0.1)) %>% 
+  mutate(logis = logistic_selection(l, 25, 50)) %>% 
+  ggplot(aes(x, ls)) +
   geom_line()
 
+tibble(length = seq(1, 50, by = 0.1)) %>% 
+  mutate(abun = dnorm(length, mean = 30, sd = 3)) %>% 
+  mutate(selected_abun = 
+           abun*logistic_selection(abun, l50=25, l95=50)) %>% 
+  ggplot(aes(x, y)) +
+  geom_line() +
+  geom_line(aes(y = y2), col = "red")
 
+
+```
+
+
+## Figure 1
+
+```{r}
+
+fig1 <- 
+  sim_select_summary %>%
+  # filter(m %in% c(0.05, 0.1, 0.2, 0.4), 
+  #            k %in% c(0.1, 0.2, 0.4, 0.8), 
+  #        cv_a == 0.1) %>% 
+  filter(m %in% c(0.2, 0.3, 0.4),
+             k %in% c(0.4, 0.2, 0.2),
+  cv_a == 0.1) %>%
+  mutate(mk = m/k, 
+         l95_const = l95/l50) %>% 
+  ggplot() +
+  aes(x = l50, 
+      y = l95_const, 
+      fill = cv, col = NULL) +
+  geom_tile() +
+  scale_fill_continuous_diverging(
+    palette = "Blue-Red 3", 
+    mid = 0.34) +
+  facet_grid(m~sim) + 
+  scale_x_continuous(limits = c(NA, 30)) +
+  scale_y_continuous(limits = c(NA, 1.5)) + 
+  geom_vline(xintercept = c(10, 15, 20))
+
+ggsave(fig1, filename = "fig1.png", 
+       height = 10, width = 10)
+```
+
+## Figure 2 - varying CV-at-age
+
+```{r}
+
+fig2 <- 
+  sim_summary %>%
+  filter(cv_a %in% c(0.05, 0.1, 0.2)) %>% 
+  mutate(k_05 = m/0.5,
+         k_10 = m/1.0,
+         k_15 = m/1.5,
+         k_20 = m/2.0) %>% 
+  ggplot() +
+  aes(x = m, 
+      y = k, 
+      fill = cv, col = NULL) +
+  geom_tile() +
+     geom_line(aes(x = m, y = k_05), lty = 2) +
+  geom_line(aes(x = m, y = k_10), lty = "13") +
+  geom_line(aes(x = m, y = k_15)) +
+  geom_line(aes(x = m, y = k_20), lty = "31") +
+  scale_fill_continuous_diverging(
+    palette = "Blue-Red 3", 
+    mid = 0.34) +
+  facet_grid(cv_a~sim) +
+  scale_y_continuous(limits = c(NA, 1.5))
+
+ggsave(fig2, filename = "fig2.png", 
+       height = 10, width = 10)
+
+```
+
+## Figure 3 - 
+
+```{r}
+
+fig3 <- 
+sim_binned_summary %>% 
+  mutate(type = "binned") %>% 
+  bind_rows(sim_summary %>% 
+ mutate(type = "unbinned"))%>%
+  mutate(k_05 = m/0.5,
+         k_10 = m/1.0,
+         k_15 = m/1.5,
+         k_20 = m/2.0) %>% 
+  filter(cv_a == 0.1) %>% 
+  ggplot() +
+  aes(x = m, 
+      y = k, 
+      fill = cv, col = NULL) +
+  geom_tile() +
+   geom_line(aes(x = m, y = k_05), lty = 2) +
+  geom_line(aes(x = m, y = k_10), lty = "13") +
+  geom_line(aes(x = m, y = k_15)) +
+  geom_line(aes(x = m, y = k_20), lty = "31") +
+  scale_fill_continuous_diverging(
+    palette = "Blue-Red 3", 
+    mid = 0.34) +
+  scale_y_continuous(limits = c(NA, 1.5)) +
+  facet_grid(type~sim)
+
+ggsave(fig3, filename = "fig3_V2.png", 
+       height = 10, width = 10)
 
 ```
 
